@@ -4,7 +4,6 @@ import logging
 import json
 from lxml import html
 import csv
-import pandas as pd
 import time
 
 logging.basicConfig(level=logging.INFO)
@@ -105,28 +104,27 @@ class Nike:
         return None
     
 
-    async def product_search(self, url):
+    async def product_search(self, url, session):
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=self.headers) as response:
-                    logging.info("Response received for product search: %d", response.status)
-                    if response.status == 200:
-                        content = await response.text()
-                        tree = html.fromstring(content)
-                        data_script = tree.xpath('//script[@id="__NEXT_DATA__"]/text()')
-                        if data_script:
-                            data_json = json.loads(data_script[0])
-                            return data_json
-                        else:
-                            logging.warning("No data script found in the product page HTML")
-                            return None 
+            async with session.get(url, headers=self.headers) as response:
+                logging.info("Response received for product search: %d", response.status)
+                if response.status == 200:
+                    content = await response.text()
+                    tree = html.fromstring(content)
+                    data_script = tree.xpath('//script[@id="__NEXT_DATA__"]/text()')
+                    if data_script:
+                        data_json = json.loads(data_script[0])
+                        return data_json    
                     else:
-                        logging.warning("Failed to fetch product details: %d", response.status)
+                        logging.warning("No data script found in the product page HTML")
+                        return None 
+                else:
+                    logging.warning("Failed to fetch product details: %d", response.status)
         except aiohttp.ClientError as e:
             logging.error("Error occurred while fetching product details: %s", str(e))
             return None 
 
-    async def extract_rating(self, url_code):
+    async def extract_rating(self, url_code, session):
         try:
             headers = {
                 'accept': '*/*',
@@ -150,46 +148,53 @@ class Nike:
             params = {
                 'count': '3',
             }
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f'https://api.nike.com/products/experience/v1/d9a5bc42-4b9c-4976-858a-f159cf99c647/PH/en-GB/styleCode/{url_code}', headers=headers, params=params) as response:
-                    logging.info("Response received for rating extraction: %d", response.status)
-                    if response.status == 200:
-                        data_json = await response.json()
-                        ratings = data_json['ratingsAndReviews']['averageOverallRating']
-                        reviews = data_json['ratingsAndReviews']['totalReviews']
-                        return ratings, reviews
-                    else:
-                        logging.warning("Failed to fetch product details for rating extraction: %d", response.status)
-                        return None, None
+            async with session.get(f'https://api.nike.com/products/experience/v1/d9a5bc42-4b9c-4976-858a-f159cf99c647/PH/en-GB/styleCode/{url_code}', params=params, headers=headers) as response:
+                logging.info("Response received for rating extraction: %d", response.status)
+                if response.status == 200:
+                    data_json = await response.json()
+                    ratings = data_json['ratingsAndReviews']['averageOverallRating']
+                    reviews = data_json['ratingsAndReviews']['totalReviews']
+                    return ratings, reviews
+                else:
+                    logging.warning("Failed to fetch product details for rating extraction: %d", response.status)
+                    return None, None
         except aiohttp.ClientError as e:
             logging.error("Error occurred while fetching product details for rating extraction: %s", str(e))
             return None, None
-
-    async def extract_product_details(self, data_json):
-        try:
-            ratings, reviews = await self.extract_rating(data_json['props']['pageProps']['selectedProduct']['styleCode'])
-            data = data_json['props']['pageProps']['selectedProduct']
-            product_details = {
-                'Product_URL': data['pdpUrl']['url'],
-                'Product_Image_URL': data['contentImages'][0]['properties']['squarish']['url'],
-                'Product_Tagging': data['productInfo']['badge'],
-                'Product_Name': data['productInfo']['title'],
-                'Product_Description': data['productInfo']['productDescription'],   
-                'Original_Price': data['prices']['initialPrice'],
-                'Discount_Price': data['prices']['currentPrice'],
-                'Sizes_Available': ", ".join([size['localizedLabel'] for size in data['sizes']]),
-                "Vouchers": data['prices']['discountPercentage'],
-                "Available_Colors": ", ".join([color['colorDescription'] for color in data_json['props']['pageProps']['colorwayImages']]),
-                "Color_Shown": data['colorDescription'],
-                'Style_Code': data['styleColor'],
-                'Rating_Score': ratings,
-                'Review_Count': reviews
-
-            }
-            return product_details
         except KeyError as e:
-            logging.error("Key error while extracting product details: %s", str(e))
-            return None
+            logging.error("Key error while parsing rating data: %s", str(e))
+            return None, None
+        
+    async def process_product(self, url, session, semaphore):
+        async with semaphore:
+            try:
+                data_json = await self.product_search(url, session)
+                if data_json:
+                    data = data_json['props']['pageProps']['selectedProduct']
+                    style_code = data['styleCode']
+                    ratings, reviews = (await self.extract_rating(style_code,session))
+                    product_details = {
+                        'Product_URL': data['pdpUrl']['url'],
+                        'Product_Image_URL': data['contentImages'][0]['properties']['squarish']['url'],
+                        'Product_Tagging': data['productInfo']['badge'],
+                        'Product_Name': data['productInfo']['title'],
+                        'Product_Description': data['productInfo']['productDescription'],   
+                        'Original_Price': data['prices']['initialPrice'],
+                        'Discount_Price': data['prices']['currentPrice'],
+                        'Sizes_Available': ", ".join([size['localizedLabel'] for size in data['sizes']]),
+                        "Vouchers": data['prices']['discountPercentage'],
+                        "Available_Colors": ", ".join([color['colorDescription'] for color in data_json['props']['pageProps']['colorwayImages']]),
+                        "Color_Shown": data['colorDescription'],
+                        'Style_Code': data['styleColor'],
+                        'Rating_Score': ratings,
+                        'Review_Count': reviews
+
+                    }
+                    return product_details
+                return None
+            except Exception as e:
+                logging.error(f"Processing failed: {e}")
+                return None
     
 async def main():
     init  = time.time()
@@ -198,19 +203,26 @@ async def main():
     logging.info("Total pages to crawl: %d", total_pages)
     
     tasks = asyncio.gather(*(nike.extract_urls(page) for page in range(1, total_pages + 1)))
+
     results = await tasks
     for data_json in results:
         if data_json:
             nike.parse_data(data_json)
+
     logging.info("Total product URLs extracted: %d", len(nike.products_urls))
-    tasks2 = asyncio.gather(*(nike.product_search(url) for url in nike.products_urls[:100]))
-    product_details_results = await tasks2
+
+    dl_seamphore = asyncio.Semaphore(10)  # Limit concurrent requests to 5
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [nike.process_product(url, session, dl_seamphore) for url in nike.products_urls]
+        results = await asyncio.gather(*tasks)
+
     product_details_list = []
-    for data_json in product_details_results:
-        if data_json:
-            details = await nike.extract_product_details(data_json)
-            if details:
-                product_details_list.append(details)
+    for result in results:
+        if result:
+            product_details_list.append(result)
+
+    
     with open('nike_products.csv', 'w', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['Product_URL', 'Product_Image_URL', 'Product_Tagging', 'Product_Name', 'Product_Description', 'Original_Price', 'Discount_Price', 'Sizes_Available', 'Vouchers', 'Available_Colors', 'Color_Shown', 'Style_Code', 'Rating_Score', 'Review_Count']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
