@@ -5,7 +5,7 @@ A high-performance Nike product scraping project built using Python.
 This project extracts product details from Nike category pages using both:
 
 - Synchronous scraping (`requests`)
-- Asynchronous scraping (`asyncio + httpx`)
+- Asynchronous scraping (`asyncio + aiohttp`)
 
 The scraper collects complete product information, performs data analysis, and exports results into CSV files.
 
@@ -30,7 +30,7 @@ The scraper collects complete product information, performs data analysis, and e
 
 - Python
 - Requests
-- HTTPX
+- aiohttp
 - Asyncio
 - Pandas
 - LXML
@@ -76,7 +76,7 @@ Create a `requirements.txt` file:
 
 ```txt
 requests
-httpx
+aiohttp
 pandas
 lxml
 tqdm
@@ -175,7 +175,7 @@ Sorting Rules:
 The asynchronous version uses:
 
 - `asyncio`
-- `httpx.AsyncClient`
+- `aiohttp.AsyncClient`
 - concurrency control with semaphores
 - HTTP/2 support
 
