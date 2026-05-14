@@ -175,7 +175,7 @@ Sorting Rules:
 The asynchronous version uses:
 
 - `asyncio`
-- `aiohttp.AsyncClient`
+- `aiohttp.ClientSession`
 - concurrency control with semaphores
 - HTTP/2 support
 
